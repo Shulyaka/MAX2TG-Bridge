@@ -15,7 +15,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 def _header(sender_name: str, profile_link: str | None = None) -> str:
-    sender_label = escape(sender_name)
+    sender_label = escape(sender_name) or "Неизвестный отправитель"
     if isinstance(profile_link, str):
         try:
             url = urlsplit(profile_link)
