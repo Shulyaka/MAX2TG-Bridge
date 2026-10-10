@@ -269,10 +269,10 @@ class TestAttachRouting:
             await _send_attaches(
                 [{"_type": "PHOTO", "baseUrl": "http://x/1"},
                  {"_type": "FILE", "name": "report.pdf", "url": "http://x/2"}],
-                client, sender, "хедер", "текст", 7, None, albums, ("c", "u"))
+                client, sender, "хедер\n", "текст", 7, None, albums, ("c", "u"))
 
         assert albums.add.await_args[0][2] == "хедер\nтекст"
-        assert captions == ["хедер"], "body text must not be repeated on the document"
+        assert captions == ["хедер\n"], "body text must not be repeated on the document"
 
     async def test_without_a_buffer_media_is_sent_directly(self):
         from app.max_listener import _send_attaches

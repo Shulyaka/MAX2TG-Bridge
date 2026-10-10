@@ -153,7 +153,9 @@ async def _groupable_item(attach: dict, client) -> tuple[str, bytes, str] | None
     return None
 
 
-def _header(sender_name: str, profile_link: str | None = None) -> str:
+def _header(sender_name: str, profile_link: str | None = None, *, is_dm: bool = False) -> str:
+    if is_dm:
+        return ""
     sender_label = escape(sender_name) or "Неизвестный отправитель"
     if isinstance(profile_link, str):
         try:
@@ -167,7 +169,7 @@ def _header(sender_name: str, profile_link: str | None = None) -> str:
         ):
             profile_url = urlunsplit(url._replace(netloc="web.max.ru"))
             sender_label = f'<a href="{escape(profile_url)}">{sender_label}</a>'
-    return f"<b>{sender_label}</b>:\n"
+    return f"<b>{sender_label}</b>:\n\n"
 
 
 def _extract_photo_url(attach: dict) -> str | None:
@@ -211,7 +213,7 @@ async def _send_attaches(attaches: list, client, sender, header_text: str,
 
     Returns True when ``body_text`` was already used as a caption.
     """
-    caption = f"{header_text}\n{escape(body_text)}" if body_text else header_text
+    caption = f"{header_text}{escape(body_text)}"
 
     text_used = False
     for attach in attaches:
@@ -229,7 +231,8 @@ async def _send_attaches(attaches: list, client, sender, header_text: str,
             # Anything that cannot ride in an album ends the current run, so
             # the attachments keep the order MAX sent them in.
             await _flush_album(albums, key)
-            await _send_attach(attach, client, sender, cap, thread_id=thread_id, msg=msg)
+            await _send_attach(attach, client, sender, cap, thread_id=thread_id, msg=msg,
+                               caption_has_text=bool(body_text) and not text_used)
             log.info("Forwarded attach _type=%s → TG", attach.get("_type"))
 
         text_used = text_used or bool(body_text)
@@ -244,10 +247,13 @@ async def _send_attach(
     header_text: str,
     thread_id: int | None = None,
     msg: MaxMessage | None = None,
+    caption_has_text: bool = False,
 ) -> bool:
     """Process and send a single attachment. Returns True if handled."""
     atype = attach.get("_type", "")
     log.info("Processing attach _type=%s keys=%s", atype, list(attach.keys()))
+    # Separate an attachment notice from caption text, keeping media captions intact.
+    notice_prefix = f"{header_text}\n" if caption_has_text else header_text
 
     if atype == "CONTROL" or atype == "WIDGET" or atype == "INLINE_KEYBOARD":
         return False
@@ -274,7 +280,7 @@ async def _send_attach(
                 return True
         dur_s = f" ({duration // 1000}с)" if duration else ""
         await sender.send(
-            f"{header_text}\n🎙 <i>[голосовое сообщение{dur_s} — не удалось скачать]</i>",
+            f"{notice_prefix}🎙 <i>[голосовое сообщение{dur_s} — не удалось скачать]</i>",
             message_thread_id=thread_id,
         )
         return True
@@ -288,7 +294,7 @@ async def _send_attach(
         if data:
             await sender.send_photo(data, caption=header_text, message_thread_id=thread_id)
             return True
-        await sender.send(f"{header_text}\n<i>[фото — не удалось загрузить]</i>", message_thread_id=thread_id)
+        await sender.send(f"{notice_prefix}<i>[фото — не удалось загрузить]</i>", message_thread_id=thread_id)
         return True
 
     if atype == "VIDEO":
@@ -296,9 +302,9 @@ async def _send_attach(
         if thumb:
             data = await client.download_file(thumb)
             if data:
-                await sender.send_photo(data, caption=f"{header_text}\n<i>[видео — превью]</i>", message_thread_id=thread_id)
+                await sender.send_photo(data, caption=f"{notice_prefix}<i>[видео — превью]</i>", message_thread_id=thread_id)
                 return True
-        await sender.send(f"{header_text}\n<i>[видео]</i>", message_thread_id=thread_id)
+        await sender.send(f"{notice_prefix}<i>[видео]</i>", message_thread_id=thread_id)
         return True
 
     if atype == "FILE":
@@ -317,7 +323,7 @@ async def _send_attach(
                     await sender.send_document(data, caption=header_text, filename=name, message_thread_id=thread_id)
                 return True
         size_str = f" ({_human_size(size)})" if size else ""
-        await sender.send(f"{header_text}\n📎 <b>{escape(name)}</b>{size_str}", message_thread_id=thread_id)
+        await sender.send(f"{notice_prefix}📎 <b>{escape(name)}</b>{size_str}", message_thread_id=thread_id)
         return True
 
     if atype == "AUDIO":
@@ -327,7 +333,7 @@ async def _send_attach(
             if data:
                 await sender.send_voice(data, caption=header_text, message_thread_id=thread_id)
                 return True
-        await sender.send(f"{header_text}\n<i>[аудио]</i>", message_thread_id=thread_id)
+        await sender.send(f"{notice_prefix}<i>[аудио]</i>", message_thread_id=thread_id)
         return True
 
     if atype == "STICKER":
@@ -337,43 +343,43 @@ async def _send_attach(
             if data:
                 await sender.send_sticker(data, message_thread_id=thread_id)
                 return True
-        await sender.send(f"{header_text}\n<i>[стикер]</i>", message_thread_id=thread_id)
+        await sender.send(f"{notice_prefix}<i>[стикер]</i>", message_thread_id=thread_id)
         return True
 
     if atype == "SHARE":
         share_url = attach.get("url", "")
         title = attach.get("title", "")
         desc = attach.get("description", "")
-        parts = [header_text]
+        parts = []
         if title:
             parts.append(f"🔗 <b>{escape(title)}</b>")
         if share_url:
             parts.append(escape(share_url))
         if desc:
             parts.append(f"<i>{escape(desc[:200])}</i>")
-        await sender.send("\n".join(parts), message_thread_id=thread_id)
+        await sender.send(notice_prefix + "\n".join(parts), message_thread_id=thread_id)
         return True
 
     if atype == "LOCATION":
         lat = attach.get("lat") or attach.get("latitude")
         lon = attach.get("lon") or attach.get("lng") or attach.get("longitude")
         if lat and lon:
-            await sender.send(f"{header_text}\n📍 {lat}, {lon}", message_thread_id=thread_id)
+            await sender.send(f"{notice_prefix}📍 {lat}, {lon}", message_thread_id=thread_id)
         else:
-            await sender.send(f"{header_text}\n<i>[геолокация]</i>", message_thread_id=thread_id)
+            await sender.send(f"{notice_prefix}<i>[геолокация]</i>", message_thread_id=thread_id)
         return True
 
     if atype == "CONTACT":
         name = attach.get("name", "")
         phone = attach.get("phone", "")
-        text = f"{header_text}\n👤 {escape(name)}"
+        text = f"{notice_prefix}👤 {escape(name)}"
         if phone:
             text += f" — {escape(phone)}"
         await sender.send(text, message_thread_id=thread_id)
         return True
 
     log.info("Unknown attach type %s, sending as info", atype)
-    await sender.send(f"{header_text}\n<i>[вложение: {escape(atype or 'unknown')}]</i>", message_thread_id=thread_id)
+    await sender.send(f"{notice_prefix}<i>[вложение: {escape(atype or 'unknown')}]</i>", message_thread_id=thread_id)
     return True
 
 
@@ -408,7 +414,7 @@ async def _handle_linked_message(
         if fwd_sender_label:
             prefix = f"↩ <b>Ответ на {fwd_sender_label}</b>"
 
-    full_header = f"{header_text}\n{prefix}"
+    full_header = f"{header_text}{prefix}\n"
 
     fwd_meaningful = [
         a for a in fwd_attaches
@@ -422,13 +428,13 @@ async def _handle_linked_message(
         )
         if fwd_text and not text_sent:
             await _flush_album(albums, key)
-            await sender.send(f"{full_header}\n{escape(fwd_text)}", message_thread_id=thread_id)
+            await sender.send(f"{full_header}{escape(fwd_text)}", message_thread_id=thread_id)
     elif fwd_text:
         await _flush_album(albums, key)
-        await sender.send(f"{full_header}\n{escape(fwd_text)}", message_thread_id=thread_id)
+        await sender.send(f"{full_header}{escape(fwd_text)}", message_thread_id=thread_id)
     else:
         await _flush_album(albums, key)
-        await sender.send(f"{full_header}\n<i>[без содержимого]</i>", message_thread_id=thread_id)
+        await sender.send(f"{full_header}<i>[без содержимого]</i>", message_thread_id=thread_id)
 
 
 def _human_size(n: int) -> str:
@@ -536,7 +542,7 @@ def create_max_client(
 
         # Use MAX's supplied user link; numeric web paths identify chats.
         contact = resolver.contacts_raw.get(msg.sender_id, {})
-        header_text = _header(raw_sender, contact.get("link"))
+        header_text = _header(raw_sender, contact.get("link"), is_dm=is_dm)
 
         # One album is one (chat, sender) run of media arriving back to back.
         album_key = (msg.chat_id, msg.sender_id)
@@ -550,7 +556,7 @@ def create_max_client(
                                          albums=albums, key=album_key)
             if msg.text:
                 await _flush_album(albums, album_key)
-                await sender.send(f"{header_text}\n{escape(msg.text)}", message_thread_id=thread_id)
+                await sender.send(f"{header_text}{escape(msg.text)}", message_thread_id=thread_id)
             log.info("Forwarded link type=%s → TG", link_type)
             return
 
@@ -566,12 +572,12 @@ def create_max_client(
             )
             if msg.text and not text_sent:
                 await _flush_album(albums, album_key)
-                await sender.send(f"{header_text}\n{escape(msg.text)}", message_thread_id=thread_id)
+                await sender.send(f"{header_text}{escape(msg.text)}", message_thread_id=thread_id)
         else:
             # Plain text must not jump ahead of media still waiting in the buffer.
             await _flush_album(albums, album_key)
             body = escape(msg.text) if msg.text else "<i>[нетекстовое сообщение]</i>"
-            await sender.send(f"{header_text}\n{body}", message_thread_id=thread_id)
+            await sender.send(f"{header_text}{body}", message_thread_id=thread_id)
             log.info("Forwarded text → TG")
 
     return client
