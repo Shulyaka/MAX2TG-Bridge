@@ -18,6 +18,7 @@ class Settings:
     tg_allowed_user_id: int | None = None
     tg_sender_prefix: bool = False
     tg_status_chat_id: str | None = None
+    tg_admin_user_id: int | None = None
 
 
 def load_settings() -> Settings:
@@ -58,6 +59,16 @@ def load_settings() -> Settings:
                 f"TG_ALLOWED_USER_ID must be a valid integer, got: {allowed_raw!r}"
             )
 
+    admin_raw = os.environ.get("TG_ADMIN_USER_ID") or None
+    admin_user_id = allowed_user_id
+    if admin_raw:
+        try:
+            admin_user_id = int(admin_raw)
+        except ValueError:
+            raise SystemExit(
+                f"TG_ADMIN_USER_ID must be a valid integer, got: {admin_raw!r}"
+            )
+
     return Settings(
         max_token=os.environ["MAX_TOKEN"],
         max_device_id=os.environ["MAX_DEVICE_ID"],
@@ -71,4 +82,5 @@ def load_settings() -> Settings:
         tg_allowed_user_id=allowed_user_id,
         tg_sender_prefix=os.environ.get("TG_SENDER_PREFIX", "").lower() in ("1", "true", "yes"),
         tg_status_chat_id=status_chat_id,
+        tg_admin_user_id=admin_user_id,
     )

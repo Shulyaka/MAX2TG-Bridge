@@ -51,6 +51,7 @@ class TestSettingsDataclass:
         assert s.debug is False
         assert s.reply_enabled is False
         assert s.tg_sender_prefix is False
+        assert s.tg_admin_user_id is None
         assert s.max_chat_ids is None
 
 
@@ -127,6 +128,30 @@ class TestLoadSettingsValid:
     def test_tg_sender_prefix_disabled(self, value):
         s = _load_settings_with_env(_env(TG_SENDER_PREFIX=value))
         assert s.tg_sender_prefix is False
+
+    def test_tg_admin_user_id_unset_without_allowed_user(self):
+        s = _load_settings_with_env(_env())
+        assert s.tg_admin_user_id is None
+
+    @pytest.mark.parametrize("admin_env", [{}, {"TG_ADMIN_USER_ID": ""}])
+    def test_tg_admin_user_id_falls_back_to_allowed_user(self, admin_env):
+        s = _load_settings_with_env(_env(TG_ALLOWED_USER_ID="100", **admin_env))
+        assert s.tg_admin_user_id == 100
+
+    def test_tg_admin_user_id_overrides_allowed_user(self):
+        s = _load_settings_with_env(_env(TG_ALLOWED_USER_ID="100", TG_ADMIN_USER_ID="777"))
+        assert s.tg_admin_user_id == 777
+        assert s.tg_allowed_user_id == 100
+
+    def test_tg_admin_user_id_without_message_restriction(self):
+        s = _load_settings_with_env(_env(TG_ADMIN_USER_ID="777"))
+        assert s.tg_admin_user_id == 777
+        assert s.tg_allowed_user_id is None
+
+    @pytest.mark.parametrize("value", ["@username", "not-an-id", "123.4"])
+    def test_invalid_tg_admin_user_id_raises(self, value):
+        with pytest.raises(SystemExit, match="TG_ADMIN_USER_ID must be a valid integer"):
+            _load_settings_with_env(_env(TG_ADMIN_USER_ID=value))
 
     def test_returns_settings_instance(self):
         s = _load_settings_with_env(_env())

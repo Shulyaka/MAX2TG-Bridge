@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 MAX_CLIENT_KEY = "max_client"
 TOPIC_STORE_KEY = "topic_store"
 ALLOWED_USER_KEY = "allowed_user_id"
+ADMIN_USER_KEY = "admin_user_id"
 SUPERGROUP_KEY = "supergroup_id"
 SENDER_PREFIX_KEY = "sender_prefix"
 
@@ -83,6 +84,22 @@ def _entities_to_max_elements(text: str, entities) -> list:
     return elements
 
 
+def _get_admin_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """Use the legacy allowed user as command admin when no admin is configured."""
+    admin_user_id = context.bot_data.get(ADMIN_USER_KEY)
+    if admin_user_id is None:
+        return context.bot_data.get(ALLOWED_USER_KEY)
+    return admin_user_id
+
+
+def _can_run_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    admin_user_id = _get_admin_user_id(context)
+    return admin_user_id is None or (
+        update.effective_user is not None
+        and update.effective_user.id == admin_user_id
+    )
+
+
 def _prepare_outgoing_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
                            text: str, entities) -> tuple[str, list]:
     """Add optional sender attribution and keep the original text formatting."""
@@ -93,6 +110,10 @@ def _prepare_outgoing_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # Anonymous administrators and messages sent on behalf of a channel have
     # sender_chat set. Use its visible identity instead of GroupAnonymousBot.
     sender_chat = update.message.sender_chat
+    admin_user_id = _get_admin_user_id(context)
+    if (not sender_chat and admin_user_id is not None and update.effective_user
+            and update.effective_user.id == admin_user_id):
+        return text, elements
     if sender_chat:
         name = sender_chat.title or sender_chat.full_name
         username = sender_chat.username
@@ -146,9 +167,11 @@ def _peer_id_in_dm(resolver, chat_id) -> int | None:
     return None
 
 
-def _resolve_topic_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def _resolve_topic_target(update: Update, context: ContextTypes.DEFAULT_TYPE, *,
+                          check_allowed_user: bool = True):
     """Common prelude for topic handlers. Returns (message, max_chat_id, max_client)
-    if the message should be routed, or None to drop silently."""
+    if the message should be routed, or None to drop silently. Command handlers
+    disable the message-user check after verifying command-admin access."""
     message = update.message
     if message is None:
         return None
@@ -160,7 +183,8 @@ def _resolve_topic_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if max_chat_id is None:
         return None
     allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if (check_allowed_user and allowed_user_id and update.effective_user
+            and update.effective_user.id != allowed_user_id):
         return None
     max_client: MaxClient | None = context.bot_data.get(MAX_CLIENT_KEY)
     return message, max_chat_id, max_client
@@ -430,8 +454,7 @@ async def _cmd_bind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _can_run_commands(update, context):
         return
 
     args = context.args or []
@@ -537,8 +560,7 @@ async def _cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _can_run_commands(update, context):
         return
 
     args = context.args or []
@@ -670,6 +692,8 @@ HELP_TEXT = (
 
 
 async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _can_run_commands(update, context):
+        return
     message = update.message
     if message is None:
         return
@@ -685,11 +709,10 @@ async def _cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _can_run_commands(update, context):
         return
 
-    target = _resolve_topic_target(update, context)
+    target = _resolve_topic_target(update, context, check_allowed_user=False)
     if not target:
         await message.reply_text(
             "Команда работает только внутри топика, связанного с MAX-чатом."
@@ -721,8 +744,7 @@ async def _on_del_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     await query.answer()
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _can_run_commands(update, context):
         return
 
     parts = query.data.split(":")
@@ -777,7 +799,9 @@ async def _cmd_intro(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     Useful for topics that were created before this feature existed, or to
     refresh the card after the contact updated their photo/name.
     """
-    target = _resolve_topic_target(update, context)
+    if not _can_run_commands(update, context):
+        return
+    target = _resolve_topic_target(update, context, check_allowed_user=False)
     message = update.message
     if message is None:
         return
@@ -799,7 +823,9 @@ async def _cmd_intro(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def _cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show profile of the Max peer linked to the current topic."""
-    target = _resolve_topic_target(update, context)
+    if not _can_run_commands(update, context):
+        return
+    target = _resolve_topic_target(update, context, check_allowed_user=False)
     message = update.message
     if message is None:
         return
@@ -940,7 +966,8 @@ async def _cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def build_tg_app(token: str, max_client: MaxClient, supergroup_id: str,
                  topic_store: TopicStore, allowed_user_id: int | None = None,
                  proxy_url: str | None = None,
-                 sender_prefix: bool = False) -> Application:
+                 sender_prefix: bool = False,
+                 admin_user_id: int | None = None) -> Application:
     """Build the Telegram Application that routes topic replies back to Max."""
     builder = Application.builder().token(token)
     if proxy_url:
@@ -949,6 +976,9 @@ def build_tg_app(token: str, max_client: MaxClient, supergroup_id: str,
     app.bot_data[MAX_CLIENT_KEY] = max_client
     app.bot_data[TOPIC_STORE_KEY] = topic_store
     app.bot_data[ALLOWED_USER_KEY] = int(allowed_user_id) if allowed_user_id else None
+    app.bot_data[ADMIN_USER_KEY] = (
+        int(admin_user_id) if admin_user_id is not None else app.bot_data[ALLOWED_USER_KEY]
+    )
     app.bot_data[SUPERGROUP_KEY] = int(supergroup_id)
     app.bot_data[SENDER_PREFIX_KEY] = sender_prefix
 

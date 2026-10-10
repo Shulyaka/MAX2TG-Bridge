@@ -89,7 +89,8 @@ async def main():
         tg_app = build_tg_app(settings.tg_bot_token, client, settings.tg_chat_id,
                               topic_store, allowed_user_id=settings.tg_allowed_user_id,
                               proxy_url=settings.tg_proxy,
-                              sender_prefix=settings.tg_sender_prefix)
+                              sender_prefix=settings.tg_sender_prefix,
+                              admin_user_id=settings.tg_admin_user_id)
         await tg_app.initialize()
         await tg_app.start()
         await tg_app.updater.start_polling(

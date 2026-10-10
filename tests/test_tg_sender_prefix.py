@@ -8,6 +8,7 @@ from telegram.constants import MessageEntityType
 
 from app.tg_handler import (
     ALLOWED_USER_KEY,
+    ADMIN_USER_KEY,
     MAX_CLIENT_KEY,
     SENDER_PREFIX_KEY,
     TOPIC_STORE_KEY,
@@ -349,3 +350,75 @@ def test_build_tg_app_wires_sender_prefix(sender_prefix):
     )
 
     assert app.bot_data[SENDER_PREFIX_KEY] is (sender_prefix is True)
+
+
+@pytest.mark.parametrize("admin_id,allowed_id", [(100, None), (None, 100)])
+async def test_admin_text_omits_prefix_and_preserves_formatting(admin_id, allowed_id):
+    user = User(100, "Иван", False, last_name="Петров", username="ivan_petrov")
+    update = _make_update("😀 Привет", user=user)
+    update.message.entities = [MessageEntity(MessageEntityType.BOLD, offset=3, length=6)]
+    context, max_client = _make_context()
+    context.bot_data[ADMIN_USER_KEY] = admin_id
+    context.bot_data[ALLOWED_USER_KEY] = allowed_id
+
+    await _on_topic_message(update, context)
+
+    max_client.send_message.assert_awaited_once_with(
+        42, "😀 Привет", elements=[{"type": "STRONG", "from": 2, "length": 6}],
+    )
+
+
+@pytest.mark.parametrize("admin_id,allowed_id", [(100, None), (None, 100)])
+@pytest.mark.parametrize("kind", MEDIA_KINDS)
+@pytest.mark.parametrize("caption", [None, "😀 Подпись"])
+async def test_admin_media_omits_prefix_and_preserves_caption(admin_id, allowed_id, kind, caption):
+    user = User(100, "Иван", False, username="ivan_petrov")
+    update = _make_update(text=None, user=user)
+    _set_media(update.message, kind, caption)
+    if caption:
+        update.message.caption_entities = [
+            MessageEntity(MessageEntityType.BOLD, offset=3, length=7)
+        ]
+    context, max_client = _make_context()
+    context.bot_data[ADMIN_USER_KEY] = admin_id
+    context.bot_data[ALLOWED_USER_KEY] = allowed_id
+
+    await _on_topic_media(update, context)
+
+    max_client.send_message.assert_awaited_once()
+    call = max_client.send_message.await_args
+    assert call.kwargs["text"] == (caption or "")
+    assert call.kwargs["elements"] == (
+        [{"type": "STRONG", "from": 2, "length": 7}] if caption else []
+    )
+    assert len(call.kwargs["attaches"]) == 1
+
+
+async def test_allowed_message_user_keeps_prefix_when_admin_is_someone_else():
+    user = User(100, "Иван", False, last_name="Петров", username="ivan_petrov")
+    update = _make_update("Привет", user=user)
+    context, max_client = _make_context()
+    context.bot_data[ADMIN_USER_KEY] = 777
+    context.bot_data[ALLOWED_USER_KEY] = 100
+
+    await _on_topic_message(update, context)
+
+    expected = "Сообщение из Telegram от Иван Петров:\n\nПривет"
+    max_client.send_message.assert_awaited_once_with(
+        42, expected, elements=[_sender_link(expected, "Иван Петров", "ivan_petrov")],
+    )
+
+
+async def test_admin_sending_as_channel_keeps_visible_channel_identity():
+    user = User(100, "Иван", False, username="ivan_petrov")
+    chat = Chat(-100123456, "channel", title="Новости", username="news_channel")
+    update = _make_update("Объявление", user=user, sender_chat=chat)
+    context, max_client = _make_context()
+    context.bot_data[ADMIN_USER_KEY] = 100
+
+    await _on_topic_message(update, context)
+
+    expected = "Сообщение из Telegram от Новости:\n\nОбъявление"
+    max_client.send_message.assert_awaited_once_with(
+        42, expected, elements=[_sender_link(expected, "Новости", "news_channel")],
+    )
